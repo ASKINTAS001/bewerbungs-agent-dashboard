@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bewerbungs-Agent Dashboard</title>
+<!-- v1.11 (26.08.2026)
+     Alle offenen Punkte:
+     - vorgeschlagen-Zustand (>=70%): grünes Banner + "Mappe erstellen"-Button
+       (vorher fehlten Buttons bei passenden Jobs).
+     - Stern dreht sich NUR noch bei Klick auf "Mappe erstellen", KEIN
+       Hintergrund-Wächter mehr (entfernt).
+     - Eigener Senden-Button (▶) rechts unten neben "Jobsuche starten".
+     - Chat-Eingabefeld: volle Breite + scrollbar bei langen Anzeigen.
+     Voraussetzung: View v_ergebnis_liste muss vorgeschlagen enthalten
+     (fix_v_ergebnis_liste_v2.sql).
+
+     v1.10 (25.08.2026, Abend)
+     Komplette Umgestaltung ggue. v1.9:
+     - Live-Karte immer sichtbar (nicht nur beim Lauf): Ruhezustand
+       „✓ Bereit" mit aufklappbar (?). Beim Lauf: x/6 + Stern +
+       Fortschritt wie bisher. Klassen-basiert (ruhezustand / aktiv).
+     - Chat-Widget Hacks: Senden-Pfeil position:absolute unten rechts
+       (Einfrierung-Risiko akzeptiert). Eingabefeld volle Breite.
+     - Jobsuche-Button sitzt unten links (such-leiste), Pfeil unten rechts.
+     - Live-Zustand: hoechster Schritt des neuesten Laufs (nicht created_at).
+     - Realtime-Listener jobs+applications + 15-Sek-Fallback (v1.9 beibehalten).
+     - Entfernen-Button („Passt nicht") + SQL-View-Fix für dauerhaft (neuer Punkt).
+     Layout/Farben/Freigabe-/E-Mail-/Kosten-Logik unveraendert.
+
+     v1.9 (25.08.2026)
+     Behebt die 3 Baustellen aus dem manuellen Test:
+     - Live-Anzeige haengt nicht mehr bei 1/6: Zustand wird jetzt ueber den
+       HOECHSTEN Schritt des juengsten Laufs (job_id) bestimmt, nicht ueber
+       die zeitlich neueste Zeile (die 6 Schritt-Zeilen entstehen fast
+       gleichzeitig -> Schritt 1 "gewann" faelschlich). ladeLiveZustand().
+     - Bewertung per Chat erscheint jetzt OHNE F5 in der Card: Supabase-
+       Realtime-Listener auf jobs+applications laedt die Bewertungsliste
+       automatisch nach; Fallback-Reload alle 15 Sek.
+       Voraussetzung fuer Sofort-Update: Realtime fuer Tabellen jobs +
+       applications in Supabase aktiviert (sonst greift der 15-Sek-Fallback).
+     - Neuer Button "Jobsuche jetzt starten" im Chat-Block -> POST auf
+       bwb-suche-starten (BWB_SEARCH-Webhook, Respond=Immediately).
+     Layout/Farben/Freigabe-/Grenzfall-/Kosten-Logik unveraendert.
+
+     v1.6 (25.08.2026)
+     Feinschliff ggue. v1.5 (nach Askins Skizze "So soll es werden"):
+     - Chat: Nachrichtenbereich + Eingabefeld bei langen Texten scrollbar.
+     - Live-Waechter: prueft alle 4 Sek build_status - laeuft eine
+       Bewertung (egal ob per Chat, Grenzfall-Button oder n8n gestartet),
+       erscheint die Stern-Anzeige automatisch.
+     - Grenzfall-Card hat jetzt BEIDE Aktionen:
+       "Ablehnen" (setzt jobs.status='abgelehnt', Card verschwindet) und
+       "Freigeben & Mappe erstellen" (Webhook, danach normale Freigabe;
+       nach Freigabe erscheint sie im Bewerbungsverlauf).
+     Voraussetzung: UPDATE-Policy auf jobs fuer authenticated
+     (D3_jobs_update_policy.sql).
+
+     v1.5 (25.08.2026)
+     Grosser Umbau ggue. v1.4:
+     - ERGEBNIS-Liste ersetzt die Freigabe-Queue: EINE Liste mit Cards je
+       bewertetem Job. Verdikt-Banner ueber volle Breite (Passt/Grenzfall/
+       Passt nicht + Score), darunter "Was passt / Was fehlt".
+       Aktionen je Zustand direkt in der Card:
+         * fertige Mappe -> E-Mail-Feld + Freigeben/Ablehnen
+         * Grenzfall     -> "Mappe trotzdem erstellen" (Webhook)
+         * passt nicht   -> nur Info
+       5 Cards sichtbar, "Mehr anzeigen" -> bis 10.
+     - Chat kuerzer (320px), Eingabefeld scrollbar bei langem Anzeigentext.
+     - Live-Anzeige mit ?-Button: erklaert die 6 build_status-Schritte,
+       inkl. Hinweis auf Execute-Once (eine Zeile pro Schritt) + 2-Sek-Poll.
+     Voraussetzung: Views v_ergebnis_liste + v_ergebnis_kriterien
+     (D2_ergebnis_liste_setup.sql); authenticated darf scores lesen.
+
+     v1.4 (25.08.2026)
+     Neu ggue. v1.3:
+     - ERGEBNIS-Card: zeigt den zuletzt bewerteten Job mit Verdikt
+       (Passt >=70 / Grenzfall 60-69 / Passt nicht <60) und zwei Listen
+       "Was passt" / "Was fehlt" (aus v_letzte_bewertung + _kriterien).
+       Pflicht-Luecken sind rot markiert.
+     - Bei Grenzfall (Score 60-69, status='grenzfall') Button
+       "Mappe trotzdem erstellen" -> ruft Webhook bwb-mappe-bauen,
+       danach startet die Live-Anzeige.
+     - LIVE-Anzeige: pollt build_status alle 2 Sek, zeigt Schritt x/6 +
+       Text + Fortschrittsbalken, verschwindet bei status='fertig' und
+       laedt Freigabe-Queue + Ergebnis neu.
+     Voraussetzung: Views v_letzte_bewertung, v_letzte_bewertung_kriterien
+     angelegt (D_ergebnis_setup.sql); authenticated darf scores lesen.
+
+     v1.3 (24.08.2026)
+     Neu ggue. v1.2:
+     - Empfaenger-E-Mail je Freigabe-Eintrag anzeigen (aus empfaenger_mail,
+       automatisch aus Anzeigen-Rohtext extrahiert) und direkt editierbar.
+       Speichert in applications.empfaenger_mail. Hinweis, wenn leer.
+     Voraussetzung: View v_wartet_auf_freigabe wurde um empfaenger_mail
+     erweitert; Rolle authenticated hat UPDATE auf applications.
+
+     Umbau ggue. v1.0:
+     - Reihenfolge: Chat -> Freigabe-Queue -> Bewerbungsverlauf -> Kosten
+     - Freigabe-Queue: nur letzte 5, jeder Eintrag mit PDF-Link (oeffnen + herunterladen)
+     - Verlauf: alle Versandstaende mit Datum UND Uhrzeit, 15 geladen, ab 5 scrollbar
+     - Header-Uhr zeigt jetzt Datum + Uhrzeit
+     - v1.2: Download-Link je Freigabe-Eintrag; Kosten mit 3 Nachkommastellen
+       (Sub-Cent-Betraege wie 0,239 EUR sonst auf 0,00 gerundet)
+     Voraussetzung: View v_wartet_auf_freigabe wurde um pdf_drive_id erweitert (Schritt 1).
+     Datenquelle: Supabase direkt aus dem Browser (RLS auf Rolle 'authenticated').
+     Freigabe-Aktion setzt bewusst NUR den Status in Supabase (applications.status).
+     Der tatsaechliche Versand bleibt manuell/separat - kein automatischer Trigger (R1). -->
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2B2B2B">
+<link rel="icon" href="icons/icon-192.png">
+
+<style>
+  :root{
+    --anthrazit:#2B2B2B; --anthrazit-dark:#1E1E1E;
+    --rot:#E2231A; --bg:#F4F2EF; --card:#FFFFFF;
+    --text:#2B2B2B; --text-muted:#8A8A88; --line:#E4E1DC;
+    --gruen:#1E7F4F; --gelb:#C98A00;
+
+    --chat--color-primary: var(--rot);
+    --chat--color-secondary: var(--anthrazit-dark);
+    --chat--window--width: 100%;
+    --chat--window--height: 100%;
+    --chat--header--background: var(--anthrazit-dark);
+    --chat--header--color: #fff;
+    --chat--message--bot--background: #f1efec;
+    --chat--message--user--background: var(--anthrazit-dark);
+    --chat--message--user--color: #fff;
+    --chat--border-radius: 10px;
+    --chat--textarea--height: 46px;
+    --chat--textarea--max-height: 110px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .wrap{max-width:820px; margin:0 auto; padding:0 16px 40px;}
+
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 0 18px; border-bottom:1px solid var(--line); margin-bottom:20px;
+  }
+  header .brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px;}
+  header .brand img{width:34px; height:34px;}
+  header nav a{color:var(--text-muted); text-decoration:none; font-size:12.5px; margin-left:16px; cursor:pointer;}
+  header nav a:hover{color:var(--rot);}
+  .clock{font-size:12px; color:var(--text-muted); margin-right:4px;}
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:20px; margin-bottom:16px;
+  }
+  .card h2{
+    font-size:13px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; margin-bottom:14px;
+  }
+  .card.top{border-top:3px solid var(--rot);}
+
+  /* ---------- KPI ---------- */
+  .kpi-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
+  .kpi{background:#FAF9F7; border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;}
+  .kpi .kv{font-size:19px; font-weight:700; line-height:1.2;}
+  .kpi .kl{font-size:10.5px; color:var(--text-muted); margin-top:3px; text-transform:uppercase; letter-spacing:.04em;}
+  .kpi-note{font-size:10.5px; color:var(--text-muted); margin-top:10px;}
+
+  /* ---------- Freigabe-Queue ---------- */
+  .freigabe-item{
+    border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:10px;
+  }
+  .fi-top{display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px;}
+  .fi-firma{font-weight:700; font-size:14px;}
+  .fi-pos{font-size:12.5px; color:var(--text-muted);}
+  .fi-score{
+    font-size:12px; font-weight:700; padding:3px 9px; border-radius:20px; flex:0 0 auto;
+    background:#EAF5EF; color:var(--gruen);
+  }
+  .fi-score.low{background:#FDF3F2; color:#8A1F1B;}
+  .fi-meta{font-size:12px; color:var(--text-muted); margin-bottom:10px;}
+  .fi-meta a{color:var(--rot); text-decoration:none; font-weight:600;}
+  .fi-meta a:hover{text-decoration:underline;}
+  .fi-actions{display:flex; gap:10px;}
+  .btn{
+    padding:9px 18px; border-radius:8px; font-size:13px; font-weight:600;
+    cursor:pointer; border:1px solid transparent; flex:1;
+  }
+  .btn:disabled{opacity:.45; cursor:default;}
+  .btn-approve{background:var(--gruen); color:#fff;}
+  .btn-reject{background:#fff; color:var(--rot); border-color:var(--rot);}
+  .empty-note{font-size:12.5px; color:var(--text-muted); text-align:center; padding:16px 0;}
+
+  /* ---------- E-Mail-Feld (Freigabe) ---------- */
+  .fi-mail{display:flex; align-items:center; gap:8px; margin-bottom:12px;}
+  .fi-mail-label{font-size:11px; color:var(--text-muted); flex:0 0 auto;}
+  .fi-mail input{
+    flex:1 1 auto; min-width:0; padding:7px 10px; border:1px solid var(--line);
+    border-radius:8px; font-size:12.5px; font-family:inherit; background:#fafafa; color:var(--text);
+  }
+  .fi-mail input:focus{outline:none; border-color:var(--rot); background:#fff;}
+  .fi-mail input.leer{border-color:var(--gelb); background:#FFFBF2;}
+  .fi-mail input.gespeichert{border-color:var(--gruen); background:#F2FBF6;}
+  .fi-mail-hint{font-size:10.5px; color:var(--gelb); margin:-6px 0 12px; padding-left:2px;}
+
+  /* ---------- Verlauf ---------- */
+  /* Container ab 5 Eintraegen scrollbar: feste Hoehe ~5 Zeilen, Rest per Scroll. */
+  .verlauf-scroll{max-height:280px; overflow-y:auto;}
+  .row{
+    display:flex; align-items:center; gap:10px; padding:10px 0;
+    border-bottom:1px solid var(--line); font-size:13px;
+  }
+  .row:last-child{border-bottom:none;}
+  .status-dot{width:9px; height:9px; border-radius:50%; flex:0 0 auto;}
+  .status-dot.versendet{background:var(--gruen);}
+  .status-dot.freigegeben{background:var(--gelb);}
+  .status-dot.wartet_freigabe{background:var(--text-muted);}
+  .status-dot.abgelehnt{background:var(--rot);}
+  .r-firma{font-weight:600; flex:1 1 auto; min-width:0;}
+  .r-firma .pos{display:block; font-weight:400; font-size:11.5px; color:var(--text-muted);}
+  .r-date{color:var(--text-muted); font-size:11.5px; width:112px; flex:0 0 auto; text-align:right; line-height:1.3;}
+  .dupe-badge{
+    font-size:10px; font-weight:700; color:var(--gelb); background:#FFF4E0;
+    border-radius:20px; padding:2px 7px; margin-left:6px; flex:0 0 auto;
+  }
+
+  /* ---------- Chat ---------- */
+  .chat-strip{height:auto; min-height:220px; max-height:520px; border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-bottom:8px; display:flex; flex-direction:column;}
+  #agentChat{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden;}
+  #agentChat > *{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden;}
+  #agentChat .chat-layout, #agentChat .chat-wrapper, #agentChat [class*="chat-window"]{height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden;}
+  #agentChat .chat-body, #agentChat .chat-messages, #agentChat .chat-messages-list,
+  #agentChat [class*="chat-body"], #agentChat [class*="messages-list"]{flex:1 1 auto; min-height:0; overflow-y:auto !important;}
+  #agentChat .chat-footer, #agentChat .chat-input, #agentChat .chat-inputs,
+  #agentChat [class*="chat-footer"], #agentChat [class*="chat-input"]{flex:0 0 auto; width:100% !important;}
+  #agentChat textarea{width:100% !important; box-sizing:border-box !important;}
+  .chat-hint{font-size:11px; color:var(--text-muted); text-align:center;}
+  /* Eingabefeld begrenzen + scrollbar bei langem Anzeigentext */
+  /* Nachrichtenbereich des Chat-Widgets immer scrollbar halten */
+  /* Chat-Widget Layout: Eingabefeld volle Breite, scrollbar */
+  .chat-strip {position:relative; display:flex; flex-direction:column;}
+  #agentChat {flex:1 1 auto; min-height:0; overflow:hidden;}
+  #agentChat textarea,
+  .chat-strip textarea,
+  [class*="chat"] textarea {
+    width:100% !important; box-sizing:border-box !important;
+    min-height:46px !important; max-height:120px !important;
+    overflow-y:auto !important; resize:vertical !important;
+  }
+  /* Jobsuche-Leiste unter dem Chat */
+  .such-leiste{display:flex; align-items:center; gap:10px; margin:10px 0 4px;}
+  .btn-suche{
+    padding:9px 16px; border-radius:8px; font-size:12.5px; font-weight:600;
+    cursor:pointer; border:1px solid var(--anthrazit); background:var(--anthrazit); color:#fff;
+    flex:0 0 auto;
+  }
+  .btn-suche:hover{background:var(--anthrazit-dark); border-color:var(--anthrazit-dark);}
+  .btn-suche:disabled{opacity:.5; cursor:default;}
+  .such-status{font-size:11.5px; color:var(--text-muted);}
+  .such-status.ok{color:var(--gruen);}
+  .such-status.err{color:var(--rot);}
+
+  /* ---------- Live-Anzeige (build_status Polling) ---------- */
+  .live-card{border-top:3px solid var(--gelb); padding:14px 0;}
+  .live-card.ruhezustand{border-top-color:var(--line); padding:10px 0;}
+  .live-card.ruhezustand .live-row{display:flex; align-items:center; gap:10px; font-size:11px; color:var(--text-muted);}
+  .live-card.ruhezustand .live-stern{display:none;}
+  .live-card.ruhezustand .live-bar{display:none;}
+  .live-card.ruhezustand .live-info{display:none;}
+  .live-card.aktiv .live-row{display:flex; align-items:center; gap:14px;}
+  .live-card.aktiv .live-bar{display:block;}
+  .live-row{display:flex; align-items:center; gap:14px;}
+  .live-stern{
+    width:26px; height:26px; flex:0 0 auto;
+    animation:live-dreh 1.4s linear infinite;
+    color:var(--rot);
+  }
+  @keyframes live-dreh{to{transform:rotate(360deg);}}
+  @media(prefers-reduced-motion:reduce){ .live-stern{animation:none;} }
+  .live-mitte{flex:1 1 auto; min-width:0;}
+  .live-text{font-size:14px; font-weight:600;}
+  .live-sub{font-size:11.5px; color:var(--text-muted); margin-top:2px;}
+  .live-zaehler{
+    font-size:13px; font-weight:700; color:var(--gelb);
+    background:#FFF7E8; border-radius:20px; padding:4px 12px; flex:0 0 auto;
+  }
+  .live-bar{height:4px; background:var(--line); border-radius:4px; margin-top:12px; overflow:hidden;}
+  .live-bar-fill{transition:width .6s ease; height:100%; background:var(--gelb); border-radius:4px;}
+  .verdikt-chip{border-radius:20px; font-weight:700; flex:0 0 auto;}
+  .verdikt-chip.verdikt-passt{background:#e6f4ec; color:var(--gruen);}
+  .verdikt-chip.verdikt-grenz{background:#fdf3e0; color:var(--gelb);}
+  .verdikt-chip.verdikt-nein{background:#fbe9e8; color:var(--rot);}
+
+  /* ---------- Live-Anzeige: ?-Info (6 Schritte) ---------- */
+  .live-info-btn{
+    margin-left:auto; flex:0 0 auto; width:22px; height:22px; border-radius:50%;
+    border:1px solid var(--line); background:#fff; color:var(--text-muted);
+    font-size:12px; font-weight:700; cursor:pointer; line-height:1;
+  }
+  .live-info-btn:hover{border-color:var(--gelb); color:var(--gelb);}
+  .live-info{
+    display:none; margin-top:14px; padding:12px 14px; border-radius:8px;
+    background:#FAF9F7; border:1px solid var(--line); font-size:12px; line-height:1.6;
+  }
+  .live-info.offen{display:block;}
+  .live-info ol{margin:6px 0 0 18px; padding:0;}
+  .live-info li{margin-bottom:3px;}
+  .live-info .hinweis{margin-top:10px; color:var(--text-muted); font-size:11px;}
+
+  /* ---------- ERGEBNIS-Liste (Cards je Job) ---------- */
+  .erg-item{
+    border:1px solid var(--line); border-radius:12px; padding:0;
+    margin-bottom:14px; overflow:hidden;
+  }
+  /* Verdikt-Banner ueber volle Breite (oben in jeder Card) */
+  .erg-banner{
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    padding:12px 16px; font-weight:700; font-size:13px;
+  }
+  .erg-banner .eb-score{font-size:17px;}
+  .erg-banner.passt{background:#EAF5EF; color:var(--gruen);}
+  .erg-banner.grenz{background:#FFF7E8; color:var(--gelb);}
+  .erg-banner.nein {background:#FDF3F2; color:#8A1F1B;}
+  .erg-body{padding:16px;}
+  .erg-firma{font-weight:700; font-size:15px;}
+  .erg-pos{font-size:12.5px; color:var(--text-muted); margin-bottom:6px;}
+  .erg-meta{font-size:12px; color:var(--text-muted); margin-bottom:12px;}
+  .erg-meta a{color:var(--rot); text-decoration:none; font-weight:600;}
+  .erg-meta a:hover{text-decoration:underline;}
+
+  .erg-listen{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:4px;}
+  .erg-spalte h3{
+    font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px;
+  }
+  .erg-spalte.passt h3{color:var(--gruen);}
+  .erg-spalte.fehlt h3{color:#8A1F1B;}
+  .erg-krit{
+    font-size:12px; padding:7px 10px; border-radius:8px; margin-bottom:6px;
+    border:1px solid var(--line); line-height:1.35;
+  }
+  .erg-krit.ok  {background:#F4FBF7; border-color:#CDE9DA;}
+  .erg-krit.miss{background:#FDF6F5; border-color:#F0D2CF;}
+  .erg-krit.pflicht{border-left:3px solid #8A1F1B;}
+  .erg-krit .kt{color:var(--text-muted); font-size:10.5px; display:block; margin-top:2px;}
+  .erg-krit-badge{font-size:9.5px; font-weight:700; text-transform:uppercase; color:#8A1F1B; margin-left:4px;}
+  .erg-leer{font-size:12px; color:var(--text-muted); padding:6px 0;}
+
+  /* E-Mail-Feld in der Card (fuer fertige Mappen) */
+  .erg-mail{display:flex; align-items:center; gap:8px; margin:14px 0 6px;}
+  .erg-mail-label{font-size:11px; color:var(--text-muted); flex:0 0 auto;}
+  .erg-mail input{
+    flex:1 1 auto; min-width:0; padding:7px 10px; border:1px solid var(--line);
+    border-radius:8px; font-size:12.5px; font-family:inherit; background:#fafafa; color:var(--text);
+  }
+  .erg-mail input:focus{outline:none; border-color:var(--rot); background:#fff;}
+  .erg-mail input.leer{border-color:var(--gelb); background:#FFFBF2;}
+  .erg-mail input.gespeichert{border-color:var(--gruen); background:#F2FBF6;}
+  .erg-mail-hint{font-size:10.5px; color:var(--gelb); margin:0 0 10px 2px;}
+
+  /* Aktionen in der Card */
+  .erg-actions{display:flex; gap:10px; margin-top:14px;}
+  .erg-btn{
+    padding:10px 18px; border-radius:8px; font-size:13px; font-weight:600;
+    cursor:pointer; border:1px solid transparent; flex:1;
+  }
+  .erg-btn:disabled{opacity:.45; cursor:default;}
+  .erg-btn-approve{background:var(--gruen); color:#fff;}
+  .erg-btn-reject {background:#fff; color:var(--rot); border-color:var(--rot);}
+  .erg-btn-mappe  {background:var(--gelb); color:#fff; flex:1;}
+
+  /* Mehr-anzeigen */
+  .erg-mehr{
+    width:100%; margin-top:4px; padding:10px; border-radius:8px;
+    border:1px solid var(--line); background:#fff; color:var(--text-muted);
+    font-size:12.5px; font-weight:600; cursor:pointer;
+  }
+  .erg-mehr:hover{border-color:var(--rot); color:var(--rot);}
+
+  @media(max-width:480px){ .erg-listen{grid-template-columns:1fr;} }
+
+  @media(max-width:480px){
+    .kpi-grid{grid-template-columns:repeat(2,1fr);}
+    .r-date{width:96px;}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" onerror="this.style.display='none'">
+      <span>Bewerbungs-Agent</span>
+    </div>
+    <div>
+      <span class="clock" id="clock">–</span>
+      <nav>
+        <a id="logout">Abmelden</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ============ 1. CHAT MIT DEM AGENTEN ============ -->
+  <div class="card top">
+    <h2>Chat mit dem Agenten</h2>
+    <div class="chat-strip"><div id="agentChat" style="height:100%;"></div></div>
+    <div class="such-leiste">
+      <button class="btn-suche" id="btnSuche">🔍 Jobsuche jetzt starten</button>
+      <span class="such-status" id="suchStatus"></span>
+    </div>
+    <div class="chat-hint">Direkter Chat mit BWB_AGENT (n8n) · versendet niemals selbst</div>
+  </div>
+
+  <!-- ============ LIVE-ANZEIGE (Mappenbau laeuft) ============ -->
+  <!-- ============ ERGEBNIS-LISTE (ersetzt Freigabe-Queue) ============ -->
+  <div class="card top">
+    <h2>Bewertungen &amp; Freigabe</h2>
+    <div id="ergebnisListe">
+      <div class="empty-note">Lade …</div>
+    </div>
+  </div>
+
+  <!-- ============ 3. ALLE FIRMEN (alle bewerteten Jobs, chronologisch) ============ -->
+  <div class="card">
+    <h2>Alle Firmen</h2>
+    <div class="verlauf-scroll" style="max-height:280px;">
+      <div id="alleFirmenList">
+        <div class="empty-note">Lade …</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 4. BEWERBUNGSVERLAUF ============ -->
+  <div class="card">
+    <h2>Bewerbungsverlauf</h2>
+    <div class="verlauf-scroll">
+      <div id="verlaufList">
+        <div class="empty-note">Lade …</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 5. UEBERSICHT / KOSTEN ============ -->
+  <div class="card">
+    <h2>Kosten</h2>
+    <div class="kpi-grid" id="kpiGrid">
+      <div class="kpi"><div class="kv">–</div><div class="kl">Lade …</div></div>
+    </div>
+    <div class="kpi-note">Aus v_kosten_uebersicht · alle Betraege in EUR</div>
+  </div>
+
+</div>
+
+<script type="module">
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+  import { createChat }   from 'https://cdn.jsdelivr.net/npm/@n8n/chat/dist/chat.bundle.es.js';
+
+  /* ================= Konfiguration ================= */
+  const SUPABASE_URL = 'https://phqhzyiocxtkkqyddiaj.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBocWh6eWlvY3h0a2txeWRkaWFqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyOTUyOTMsImV4cCI6MjEwMDg3MTI5M30.ArVUzuJzQeX3A4X36FzDL5Cu5JkOhWD3zylUg177f7Q'; // Supabase -> Project Settings -> API -> anon/public
+  const CHAT_URL = 'https://n8n.innovia-tas.de/webhook/bwb-agent-chat/chat';
+  const MAPPE_URL = 'https://n8n.innovia-tas.de/webhook/bwb-mappe-bauen';
+  const SUCHE_URL = 'https://n8n.innovia-tas.de/webhook/bwb-suche-starten';
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  /* ================= Zugriffsschutz ================= */
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) { location.href = 'index.html'; }
+
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === 'SIGNED_OUT') location.href = 'index.html';
+  });
+
+  document.getElementById('logout').addEventListener('click', async () => {
+    await supabase.auth.signOut();
+  });
+
+  /* ================= Uhr (Datum + Uhrzeit) ================= */
+  function tick(){
+    document.getElementById('clock').textContent =
+      new Date().toLocaleString('de-DE', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
+  }
+  tick(); setInterval(tick, 30000);
+
+  /* ================= Hilfsfunktionen ================= */
+  // Nur Tag/Monat (Freigabe-Queue).
+  function fmtDatum(iso){
+    if (!iso) return '–';
+    return new Date(iso).toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit'});
+  }
+  // Datum + Uhrzeit, zweizeilig (Verlauf).
+  function fmtDatumZeit(iso){
+    if (!iso) return '–';
+    const d = new Date(iso);
+    const tag = d.toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'2-digit'});
+    const zeit = d.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    return `${tag}<br>${zeit}`;
+  }
+  function fmtEur(n){
+    return (Number(n) || 0).toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+  }
+  // Kosten: 3 Nachkommastellen, damit Sub-Cent-Betraege sichtbar bleiben.
+  function fmtEurKosten(n){
+    return (Number(n) || 0).toLocaleString('de-DE', {minimumFractionDigits:3, maximumFractionDigits:3}) + ' €';
+  }
+  function driveLinkView(id){
+    return `https://drive.google.com/file/d/${id}/view`;
+  }
+  function driveLinkDownload(id){
+    return `https://drive.google.com/uc?export=download&id=${id}`;
+  }
+  // Deutsche Kurzlabel fuer bekannte Spaltennamen aus v_kosten_uebersicht.
+  const KPI_LABELS = {
+    heute:'Heute', tag:'Heute', woche:'Woche', monat:'Monat', jahr:'Jahr', gesamt_eur:'Gesamt', gesamt:'Gesamt'
+  };
+  function kpiLabel(key){
+    const k = key.toLowerCase();
+    for (const [pattern, label] of Object.entries(KPI_LABELS)) {
+      if (k.includes(pattern)) return label;
+    }
+    return key.replace(/_/g,' ');
+  }
+
+  /* ================= Kosten-KPIs ================= */
+  async function ladeKosten(){
+    const el = document.getElementById('kpiGrid');
+    const { data, error } = await supabase.from('v_kosten_uebersicht').select('*').maybeSingle();
+    if (error || !data) {
+      el.innerHTML = '<div class="empty-note">Kosten konnten nicht geladen werden.</div>';
+      return;
+    }
+    el.innerHTML = Object.entries(data).map(([key, val]) => `
+      <div class="kpi">
+        <div class="kv">${fmtEurKosten(val)}</div>
+        <div class="kl">${kpiLabel(key)}</div>
+      </div>
+    `).join('');
+  }
+
+  /* ================= ERGEBNIS-Liste (ersetzt Freigabe-Queue) ================= */
+  // Verdikt aus Score - gleiche Schwellen wie SCORING (70 / 60).
+  function verdiktVon(score, zustand){
+    if (zustand === 'vorgeschlagen' || score >= 70) return { cls:'passt', label:'Passt' };
+    if (zustand === 'grenzfall' || score >= 60) return { cls:'grenz', label:'Grenzfall' };
+    return { cls:'nein', label:'Passt nicht' };
+  }
+
+  function kritZeile(k){
+    const pflicht = k.pflicht ? ' pflicht' : '';
+    const badge = k.pflicht ? '<span class="erg-krit-badge">Pflicht</span>' : '';
+    const kls = k.erfuellt ? 'ok' : 'miss';
+    const treffer = k.erfuellt && k.treffer
+      ? `<span class="kt">Abgedeckt durch: ${k.treffer}</span>` : '';
+    const stufe = !k.erfuellt
+      ? `<span class="kt">Lernbarkeit: ${k.lern_stufe || '–'}</span>` : '';
+    return `<div class="erg-krit ${kls}${pflicht}">${k.kriterium}${badge}${treffer}${stufe}</div>`;
+  }
+
+  let ergAlleZeigen = false;   // 5 sichtbar, auf Klick bis 10
+
+  async function ladeErgebnisListe(){
+    const el = document.getElementById('ergebnisListe');
+
+    const [{ data: jobs, error: e1 }, { data: krit }] = await Promise.all([
+      supabase.from('v_ergebnis_liste').select('*'),
+      supabase.from('v_ergebnis_kriterien').select('*')
+    ]);
+
+    if (e1) { el.innerHTML = '<div class="empty-note">Fehler beim Laden.</div>'; return; }
+    // Nur "Passt" (>=70%) und "Grenzfall" (60-69%) anzeigen - "Passt nicht" raus
+    const jobsGefiltert = (jobs || []).filter(j => j.zustand !== 'info');
+    if (!jobsGefiltert || jobsGefiltert.length === 0) {
+      el.innerHTML = '<div class="empty-note">Noch keine passenden Bewertungen (≥60%) vorhanden.</div>';
+      return;
+    }
+
+    // Kriterien nach job_id gruppieren
+    const kritMap = {};
+    (krit || []).forEach(k => { (kritMap[k.job_id] = kritMap[k.job_id] || []).push(k); });
+
+    const sichtbar = ergAlleZeigen ? jobsGefiltert.slice(0,10) : jobsGefiltert.slice(0,5);
+
+    el.innerHTML = sichtbar.map(job => {
+      const score = job.score != null ? Math.round(job.score) : 0;
+      const v = verdiktVon(score, job.zustand);
+      const ks = kritMap[job.job_id] || [];
+      const erfuellt = ks.filter(k => k.erfuellt);
+      const fehlt    = ks.filter(k => !k.erfuellt);
+
+      // Meta-Zeile (Seiten + PDF-Links) nur bei fertiger Mappe
+      const meta = [];
+      if (job.seitenzahl) meta.push(job.seitenzahl + ' Seiten');
+      if (job.pdf_drive_id) {
+        meta.push(`<a href="${driveLinkView(job.pdf_drive_id)}" target="_blank" rel="noopener">PDF öffnen ↗</a>`);
+        meta.push(`<a href="${driveLinkDownload(job.pdf_drive_id)}" target="_blank" rel="noopener">⬇ Herunterladen</a>`);
+      }
+
+      // Aktionsbereich je Zustand
+      let aktionen = '';
+      if (job.zustand === 'freigabe' && job.application_id) {
+        aktionen = `
+          <div class="erg-mail">
+            <span class="erg-mail-label">E-Mail:</span>
+            <input type="email" class="mail-input${job.empfaenger_mail ? '' : ' leer'}"
+                   value="${job.empfaenger_mail || ''}"
+                   placeholder="keine gefunden – bitte eintragen"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          ${job.empfaenger_mail ? '' : '<div class="erg-mail-hint">Automatik hat keine Adresse gefunden – bitte selbst eintragen.</div>'}
+          <div class="erg-actions">
+            <button class="erg-btn erg-btn-reject"  data-action="abgelehnt">Ablehnen</button>
+            <button class="erg-btn erg-btn-approve" data-action="freigegeben">Freigeben</button>
+          </div>`;
+      } else if (job.zustand === 'grenzfall' || job.zustand === 'vorgeschlagen') {
+        aktionen = `
+          <div class="erg-actions">
+            <button class="erg-btn erg-btn-reject" data-job-ablehnen="1">Ablehnen</button>
+            <button class="erg-btn erg-btn-mappe" data-mappe="1">Mappe erstellen</button>
+          </div>`;
+      }
+
+      return `
+      <div class="erg-item" data-job="${job.job_id}" data-app="${job.application_id || ''}">
+        <div class="erg-banner ${v.cls}">
+          <span>${v.label}</span>
+          <span class="eb-score">${score}%</span>
+        </div>
+        <div class="erg-body">
+          <div class="erg-firma">${job.firma || 'Unbekannte Firma'}</div>
+          <div class="erg-pos">${job['position'] || ''}</div>
+          ${meta.length ? `<div class="erg-meta">${meta.join(' · ')}</div>` : ''}
+          <div class="erg-listen">
+            <div class="erg-spalte passt">
+              <h3>Was passt (${erfuellt.length})</h3>
+              ${erfuellt.length ? erfuellt.map(kritZeile).join('') : '<div class="erg-leer">Kein Kriterium erfüllt.</div>'}
+            </div>
+            <div class="erg-spalte fehlt">
+              <h3>Was fehlt (${fehlt.length})</h3>
+              ${fehlt.length ? fehlt.map(kritZeile).join('') : '<div class="erg-leer">Alle Kriterien erfüllt.</div>'}
+            </div>
+          </div>
+          ${aktionen}
+        </div>
+      </div>`;
+    }).join('')
+    + (jobsGefiltert.length > 5 && !ergAlleZeigen
+        ? `<button class="erg-mehr" id="ergMehr">Mehr anzeigen (${jobsGefiltert.length - 5} weitere)</button>`
+        : '');
+
+    // --- Handler: Mehr anzeigen ---
+    const mehr = document.getElementById('ergMehr');
+    if (mehr) mehr.addEventListener('click', () => { ergAlleZeigen = true; ladeErgebnisListe(); });
+
+    // --- Handler: E-Mail speichern (blur/Enter) ---
+    el.querySelectorAll('.mail-input').forEach(inp => {
+      const item = inp.closest('.erg-item');
+      const appId = item.dataset.app;
+      let letzterWert = inp.value;
+      async function speichern(){
+        const wert = inp.value.trim();
+        if (wert === letzterWert) return;
+        if (wert && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(wert)) {
+          inp.classList.add('leer'); inp.classList.remove('gespeichert'); return;
+        }
+        const { error } = await supabase.from('applications')
+          .update({ empfaenger_mail: wert || null }).eq('id', appId);
+        if (error) { alert('E-Mail konnte nicht gespeichert werden: ' + error.message); return; }
+        letzterWert = wert;
+        inp.classList.remove('leer'); inp.classList.add('gespeichert');
+        setTimeout(() => inp.classList.remove('gespeichert'), 1500);
+      }
+      inp.addEventListener('blur', speichern);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+    });
+
+    // --- Handler: Freigeben / Ablehnen ---
+    el.querySelectorAll('button[data-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const item = btn.closest('.erg-item');
+        const appId = item.dataset.app;
+        const jobId = item.dataset.job;
+        const status = btn.dataset.action;
+        item.querySelectorAll('button').forEach(b => b.disabled = true);
+        const patch = { status };
+        if (status === 'freigegeben') patch.freigegeben_am = new Date().toISOString();
+        const { error } = await supabase.from('applications').update(patch).eq('id', appId);
+        if (error) { alert('Fehler: ' + error.message); item.querySelectorAll('button').forEach(b => b.disabled = false); return; }
+        // WICHTIG: auch jobs.status setzen, sonst faellt die View nach dem
+        // naechsten Reload auf j.status='vorgeschlagen' zurueck und der
+        // Job erscheint erneut in der Liste (Bug: "kommt nach 15 Sek zurueck").
+        if (jobId) {
+          const jobStatus = status === 'freigegeben' ? 'beworben' : 'abgelehnt';
+          await supabase.from('jobs').update({ status: jobStatus }).eq('id', jobId);
+        }
+        item.remove();
+        ladeVerlauf(); ladeAlleFirmen();
+        if (!document.querySelector('.erg-item')) {
+          document.getElementById('ergebnisListe').innerHTML = '<div class="empty-note">Noch keine Bewertungen vorhanden.</div>';
+        }
+      });
+    });
+
+    // --- Handler: Mappe trotzdem erstellen (Grenzfall) ---
+    el.querySelectorAll('button[data-mappe]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = btn.closest('.erg-item');
+        mappeErstellen(btn, item.dataset.job);
+      });
+    });
+
+    // --- Handler: Grenzfall ablehnen (setzt jobs.status, Card verschwindet) ---
+    el.querySelectorAll('button[data-job-ablehnen]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const item = btn.closest('.erg-item');
+        const jobId = item.dataset.job;
+        item.querySelectorAll('button').forEach(b => b.disabled = true);
+        const { error } = await supabase.from('jobs')
+          .update({ status: 'abgelehnt' }).eq('id', jobId);
+        if (error) {
+          alert('Ablehnen fehlgeschlagen: ' + error.message);
+          item.querySelectorAll('button').forEach(b => b.disabled = false);
+          return;
+        }
+        item.remove();
+        if (!document.querySelector('.erg-item')) {
+          document.getElementById('ergebnisListe').innerHTML =
+            '<div class="empty-note">Noch keine Bewertungen vorhanden.</div>';
+        }
+      });
+    });
+  }
+
+
+  /* ================= Bewerbungsverlauf (alle Versandstaende, Datum+Uhrzeit, 15) ================= */
+  async function ladeAlleFirmen(){
+    const el = document.getElementById('alleFirmenList');
+    const { data: jobs, error } = await supabase
+      .from('jobs')
+      .select('firma, "position", score_potenzial, status, bewertet_am')
+      .not('bewertet_am', 'is', null)
+      .order('bewertet_am', { ascending:false })
+      .limit(40);
+    if (error) { el.innerHTML = '<div class="empty-note">Fehler beim Laden.</div>'; return; }
+    if (!jobs || jobs.length === 0) { el.innerHTML = '<div class="empty-note">Noch keine Bewertungen.</div>'; return; }
+    el.innerHTML = jobs.map(j => {
+      const score = j.score_potenzial != null ? Math.round(j.score_potenzial) : 0;
+      const cls = score >= 70 ? 'passt' : (score >= 60 ? 'grenz' : 'nein');
+      return `
+      <div class="row">
+        <span class="verdikt-chip verdikt-${cls}" style="font-size:10px; padding:2px 8px;">${score}%</span>
+        <span class="r-firma">${j.firma || 'Unbekannt'} <span class="pos">${j.position || ''}</span></span>
+        <span class="r-date">${fmtDatumZeit(j.bewertet_am)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  async function ladeVerlauf(){
+    const el = document.getElementById('verlaufList');
+
+    const [{ data: verlauf, error: e1 }, { data: firmen }] = await Promise.all([
+      supabase.from('v_versandstand').select('*').order('versendet_am', { ascending:false }).limit(15),
+      supabase.from('v_bewerbungen_je_firma').select('*')
+    ]);
+
+    if (e1) { el.innerHTML = '<div class="empty-note">Fehler beim Laden.</div>'; return; }
+    if (!verlauf || verlauf.length === 0) {
+      el.innerHTML = '<div class="empty-note">Noch keine Bewerbungen im Verlauf.</div>';
+      return;
+    }
+
+    const dupeMap = {};
+    (firmen || []).forEach(f => { if (f.anzahl > 1) dupeMap[f.firma_klein] = f.anzahl; });
+
+    el.innerHTML = verlauf.map(row => {
+      const dupeCount = row.firma ? dupeMap[row.firma.toLowerCase()] : null;
+      return `
+      <div class="row">
+        <span class="status-dot ${row.status || ''}"></span>
+        <span class="r-firma">
+          ${row.firma || 'Unbekannt'}
+          ${dupeCount ? `<span class="dupe-badge">${dupeCount}×</span>` : ''}
+          <span class="pos">${row.position || ''}</span>
+        </span>
+        <span class="r-date">${fmtDatumZeit(row.versendet_am)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  /* ================= Mappe erzwingen (Grenzfall-Button) ================= */
+  async function mappeErstellen(btn, jobId){
+    btn.disabled = true;
+    btn.textContent = 'Wird gestartet …';
+    aktiverMappeButton = btn;
+
+    try {
+      const r = await fetch(MAPPE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId })
+      });
+      if (!r.ok) throw new Error('Server ' + r.status);
+      starteLivePolling();
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Erneut versuchen';
+      aktiverMappeButton = null;
+      alert('Mappe konnte nicht gestartet werden: ' + e.message);
+    }
+  }
+
+  /* ================= Live-Anzeige (build_status pollen) ================= */
+  let livePollTimer = null;
+  const LIVE_MAX = 6;
+
+  // Zeigt/versteckt den Baufortschritt NICHT mehr als eigene Card, sondern
+  // nur als Text auf dem zuletzt geklickten "Mappe erstellen"-Button.
+  let aktiverMappeButton = null;
+
+  function zeigeLive(schritt, text){
+    if (aktiverMappeButton) {
+      aktiverMappeButton.textContent = `⏳ Schritt ${schritt}/${LIVE_MAX}: ${text || 'wird erstellt …'}`;
+    }
+  }
+  function versteckeLive(){
+    if (aktiverMappeButton) {
+      aktiverMappeButton.textContent = 'Mappe erstellen';
+      aktiverMappeButton.disabled = false;
+      aktiverMappeButton = null;
+    }
+  }
+
+  // Ermittelt den Zustand des JUENGSTEN Mappenbaus.
+  // WICHTIG: Die 6 Schritt-Zeilen eines Laufs werden fast gleichzeitig
+  // geschrieben - nach created_at zu sortieren liefert oft Schritt 1
+  // ("laeuft") als "neueste" Zeile, obwohl der Lauf laengst fertig ist.
+  // Deshalb: neuesten Lauf ueber die job_id der letzten Zeile bestimmen,
+  // dann innerhalb dieses Laufs den HOECHSTEN Schritt betrachten.
+  // Rueckgabe: { schritt, text, fertig, aktiv } oder null.
+  async function ladeLiveZustand(){
+    // 1. job_id + Zeitpunkt der allerletzten Zeile
+    const { data: letzte } = await supabase
+      .from('build_status')
+      .select('job_id, created_at')
+      .order('created_at', { ascending:false })
+      .limit(1);
+    if (!letzte || !letzte.length) return null;
+
+    const jobId = letzte[0].job_id;
+    const alterMs = Date.now() - new Date(letzte[0].created_at).getTime();
+
+    // 2. alle Zeilen dieses Laufs, hoechster Schritt zuerst
+    const { data: zeilen } = await supabase
+      .from('build_status')
+      .select('schritt, schritt_text, status')
+      .eq('job_id', jobId)
+      .order('schritt', { ascending:false })
+      .limit(1);
+    if (!zeilen || !zeilen.length) return null;
+
+    const top = zeilen[0];
+    const fertig = (top.status === 'fertig') || (Number(top.schritt) >= LIVE_MAX);
+    // aktiv = nicht fertig UND juenger als 10 Min (sonst Altlast/Abbruch)
+    const aktiv = !fertig && alterMs < 10 * 60 * 1000;
+    return { schritt: Number(top.schritt) || 1, text: top.schritt_text, fertig, aktiv };
+  }
+
+  async function livePoll(){
+    const z = await ladeLiveZustand();
+    if (!z) return;
+
+    if (z.fertig || !z.aktiv) {
+      // Lauf fertig (oder Altlast): Polling stoppen, Anzeige weg, Listen neu laden.
+      clearInterval(livePollTimer); livePollTimer = null;
+      versteckeLive();
+      ergAlleZeigen = false;
+      ladeErgebnisListe();
+      ladeVerlauf(); ladeAlleFirmen();
+      return;
+    }
+    zeigeLive(z.schritt, z.text);
+  }
+
+  async function starteLivePolling(){
+    if (livePollTimer) return;          // laeuft schon
+    // Erst pruefen ob wirklich ein Lauf aktiv ist
+    const z = await ladeLiveZustand();
+    if (!z || z.fertig || !z.aktiv) {
+      versteckeLive();
+      return;                            // kein aktiver Lauf -> nichts zeigen
+    }
+    zeigeLive(z.schritt, z.text);
+    livePollTimer = setInterval(livePoll, 2000);
+  }
+
+  /* Hintergrund-Waechter: erkennt auch Laeufe, die per Chat oder
+     Grenzfall-Button gestartet wurden. Startet die Live-Anzeige nur bei
+     einem WIRKLICH laufenden Bau (hoechster Schritt < 6, juenger als
+     10 Min) - eine liegengebliebene "laeuft"-Zeile eines fertigen Laufs
+     loest sie dank ladeLiveZustand() nicht mehr aus. */
+  async function liveWaechter(){
+    if (livePollTimer) return;          // Anzeige laeuft schon
+    const z = await ladeLiveZustand();
+    if (z && z.aktiv) await starteLivePolling();
+  }
+  // Kein Hintergrund-Waechter mehr: Stern nur bei Button-Klick.
+
+  /* ================= Card nach Chat-Bewertung automatisch nachladen =================
+     Eine reine Bewertung (Grenzfall / "passt nicht") schreibt NICHTS in
+     build_status - der Live-Waechter merkt sie also nicht. Damit die Card
+     trotzdem ohne F5 aktualisiert, hoeren wir per Supabase-Realtime auf
+     Aenderungen an jobs + applications. Zusaetzlich ein leiser Fallback-
+     Reload alle 15 Sek, falls Realtime nicht aktiviert ist. */
+  let reloadGedrosselt = false;
+  function ergebnisleisteNachladen(){
+    if (reloadGedrosselt) return;       // max. 1x alle 3 Sek
+    reloadGedrosselt = true;
+    setTimeout(() => { reloadGedrosselt = false; }, 3000);
+    ladeErgebnisListe();
+    ladeVerlauf(); ladeAlleFirmen();
+    ladeKosten();
+  }
+
+  try {
+    supabase
+      .channel('bwb-live')
+      .on('postgres_changes', { event:'*', schema:'public', table:'jobs' },        ergebnisleisteNachladen)
+      .on('postgres_changes', { event:'*', schema:'public', table:'applications' }, ergebnisleisteNachladen)
+      .subscribe();
+  } catch(e){ /* Realtime evtl. nicht aktiv - Fallback greift */ }
+
+  // Fallback: alle 15 Sek leise nachladen (nur wenn kein Bau laeuft,
+  // um die Live-Anzeige nicht zu stoeren).
+  setInterval(() => { if (!livePollTimer) ergebnisleisteNachladen(); }, 15000);
+
+  /* ================= Chat-Widget ================= */
+  createChat({
+    webhookUrl: CHAT_URL,
+    target: '#agentChat',
+    mode: 'fullscreen',
+    showWelcomeScreen: false,
+    initialMessages: ['Hallo Askin! Womit kann ich dir bei deinen Bewerbungen helfen?'],
+    i18n: {
+      en: {
+        title: '', subtitle: '',
+        inputPlaceholder: 'Nachricht oder Stellenanzeige einfügen …',
+        getStarted: 'Neuer Chat',
+        footer: ''
+      }
+    }
+  });
+
+  /* ================= Start ================= */
+  ladeKosten();
+  ladeVerlauf(); ladeAlleFirmen();
+  ladeErgebnisListe();
+
+
+
+  /* ================= Live-Info Toggle (?-Button) ================= */
+  /* Live-Info-Button entfernt (Live-Card weggelassen) */
+
+  /* ================= Jobsuche jetzt starten =================
+     Loest den BWB_SEARCH-Webhook aus (Respond=Immediately). Der Suchlauf
+     laeuft ~1-2 Min im Hintergrund; neue Treffer erscheinen danach per
+     Realtime/Fallback von selbst in der Bewertungsliste. */
+  document.getElementById('btnSuche').addEventListener('click', async () => {
+    const btn = document.getElementById('btnSuche');
+    const st  = document.getElementById('suchStatus');
+    btn.disabled = true;
+    st.className = 'such-status';
+    st.textContent = 'Suche wird gestartet …';
+    try {
+      const r = await fetch(SUCHE_URL, { method:'POST', headers:{ 'Content-Type':'application/json' }, body:'{}' });
+      if (!r.ok) throw new Error('Server ' + r.status);
+      st.className = 'such-status ok';
+      st.textContent = 'Suche läuft – neue Treffer erscheinen in 1–2 Min automatisch.';
+      // Nach 90 Sek einmal nachladen, falls Realtime nicht greift.
+      setTimeout(ergebnisleisteNachladen, 90000);
+    } catch(e){
+      st.className = 'such-status err';
+      st.textContent = 'Start fehlgeschlagen: ' + e.message;
+    } finally {
+      setTimeout(() => { btn.disabled = false; }, 5000);
+    }
+  });
+
+</script>
+
+</body>
+</html>
